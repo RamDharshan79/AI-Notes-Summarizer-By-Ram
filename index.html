@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Notes Summarizer — Simple & Cool</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#7c3aed;--muted:#94a3b8;--glass: rgba(255,255,255,0.03)}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;background:linear-gradient(180deg,#081226 0%, #071225 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh}
+    .card{width:900px;max-width:95%;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:16px;padding:22px;box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+    h1{margin:0 0 8px 0;font-size:20px}
+    p.lead{margin:0 0 18px 0;color:var(--muted)}
+    .cols{display:grid;grid-template-columns:1fr 420px;gap:18px}
+    textarea{width:100%;height:330px;padding:12px;border-radius:10px;background:var(--card);border:1px solid rgba(255,255,255,0.03);color:inherit;font-size:14px;resize:vertical}
+    .controls{display:flex;gap:8px;margin-top:10px;align-items:center}
+    button{background:var(--accent);border:0;padding:10px 14px;border-radius:10px;color:white;cursor:pointer;font-weight:600}
+    select,input[type=range]{background:var(--glass);border:1px solid rgba(255,255,255,0.03);color:inherit;padding:8px;border-radius:8px}
+    .summary{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));padding:12px;border-radius:10px;height:330px;overflow:auto;border:1px solid rgba(255,255,255,0.03)}
+    .meta{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+    .small{font-size:13px;color:var(--muted)}
+    .copy{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px;border-radius:8px;cursor:pointer}
+    footer{margin-top:14px;color:var(--muted);font-size:12px}
+    .hint{color:var(--muted);font-size:13px;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>AI Notes Summarizer (Simple + Cool)</h1>
+    <p class="lead">Paste lecture notes, articles, or long text on the left. Click <strong>Summarize</strong> to get a clean summary on the right.</p>
+
+    <div class="cols">
+      <div>
+        <div class="meta"><div class="small">Input text</div><div style="flex:1"></div><div class="small">Sentences: <span id="sentCount">0</span></div></div>
+        <textarea id="input" placeholder="Paste your notes here..."></textarea>
+
+        <div class="controls">
+          <label class="small">Summary length</label>
+          <select id="length">
+            <option value="short">Short (3 sentences)</option>
+            <option value="medium" selected>Medium (5 sentences)</option>
+            <option value="long">Long (8 sentences)</option>
+          </select>
+
+          <label class="small">Method</label>
+          <select id="method">
+            <option value="extractive" selected>Extractive (fast, offline)</option>
+            <option value="llm">LLM-backed (requires server)</option>
+          </select>
+
+          <button id="summarize">Summarize</button>
+          <button id="clear" style="background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit">Clear</button>
+        </div>
+
+        <div class="hint">Tip: You can expand this with an LLM server for stronger summaries.</div>
+      </div>
+
+      <div>
+        <div class="meta"><div class="small">Summary</div><div style="flex:1"></div><div><button class="copy" id="copy">Copy</button></div></div>
+        <div id="summary" class="summary small">Your summary will appear here.</div>
+
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+          <div class="small">Keywords:</div>
+          <div id="keywords" class="small" style="color:#cbd5e1"></div>
+        </div>
+
+        <footer>Made for Cursor + Kiro.</footer>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const inputEl = document.getElementById('input');
+    const summaryEl = document.getElementById('summary');
+    const summarizeBtn = document.getElementById('summarize');
+    const lengthSelect = document.getElementById('length');
+    const methodSelect = document.getElementById('method');
+    const keywordsEl = document.getElementById('keywords');
+    const sentCountEl = document.getElementById('sentCount');
+    const copyBtn = document.getElementById('copy');
+    const clearBtn = document.getElementById('clear');
+
+    function splitSentences(text){
+      const s = text.replace(/\n+/g, ' ').trim();
+      if(!s) return [];
+      return s.match(/[^.!?]+[.!?]?/g) || [s];
+    }
+
+    function tokenize(text){
+      return text.toLowerCase().replace(/[^a-z0-9\s]/g,'').split(/\s+/).filter(Boolean);
+    }
+
+    function scoreSentences(sentences){
+      const freq = {};
+      sentences.forEach(s=>{
+        tokenize(s).forEach(t=> freq[t] = (freq[t]||0)+1);
+      });
+
+      return sentences.map(s=>{
+        return tokenize(s).reduce((sum,t)=> sum+(freq[t]||0),0);
+      });
+    }
+
+    function topNSentences(sentences, scores, n){
+      const idx = sentences.map((_,i)=>i).sort((a,b)=>scores[b]-scores[a]);
+      return idx.slice(0,n).sort((a,b)=>a-b).map(i=>sentences[i].trim());
+    }
+
+    function extractSummary(text, length){
+      const sentences = splitSentences(text);
+      if(sentences.length === 0) return {summary:'', keywords:[]};
+      const scores = scoreSentences(sentences);
+      const n = Math.min(length, sentences.length);
+      const picked = topNSentences(sentences, scores, n);
+
+      const tokens = tokenize(text);
+      const freq = {};
+      tokens.forEach(t=> freq[t] = (freq[t]||0)+1);
+      const keywords = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,6).map(x=>x[0]);
+
+      return {summary: picked.join(' '), keywords};
+    }
+
+    async function callLLMProxy(text, lengthLabel){
+      try{
+        const res = await fetch('/api/summarize', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({text, length:lengthLabel})
+        });
+        return await res.json();
+      }catch(err){
+        return {error: err.message};
+      }
+    }
+
+    summarizeBtn.addEventListener('click', async ()=>{
+      const text = inputEl.value.trim();
+      if(!text){ summaryEl.textContent = 'Paste text first.'; return; }
+
+      const label = lengthSelect.value;
+      let n = label === 'short' ? 3 : label === 'medium' ? 5 : 8;
+
+      if(methodSelect.value === 'extractive'){
+        const {summary, keywords} = extractSummary(text, n);
+        summaryEl.textContent = summary || 'No summary.';
+        keywordsEl.textContent = keywords.join(', ');
+      } else {
+        summaryEl.textContent = 'Calling LLM...';
+        const out = await callLLMProxy(text, label);
+        if(out.error){ summaryEl.textContent = 'Error: ' + out.error; keywordsEl.textContent=''; }
+        else{ summaryEl.textContent = out.summary; keywordsEl.textContent=(out.keywords||[]).join(', '); }
+      }
+    });
+
+    inputEl.addEventListener('input', ()=>{
+      sentCountEl.textContent = splitSentences(inputEl.value).length;
+    });
+
+    copyBtn.addEventListener('click', ()=>{
+      navigator.clipboard.writeText(summaryEl.textContent);
+      copyBtn.textContent = 'Copied!';
+      setTimeout(()=>copyBtn.textContent='Copy',1200);
+    });
+
+    clearBtn.addEventListener('click', ()=>{
+      inputEl.value='';
+      summaryEl.textContent='Your summary will appear here.';
+      keywordsEl.textContent='';
+      sentCountEl.textContent=0;
+    });
+  </script>
+</body>
+</html>
